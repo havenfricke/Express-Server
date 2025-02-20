@@ -7,10 +7,10 @@
 ## SETUP
 - Create .env file
 - Place in root directory
+- `cd server`
 - `npm i` 
 
 ## RUN
-- `cd server` 
 - `node entry.js` 
 
 ## DOTENV REQUIREMENTS
