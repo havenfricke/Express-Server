@@ -1,0 +1,196 @@
+### ADDING AUTH
+
+Below is an extended, updated example of how you can set up a highly secure user authentication flow with:
+
+Input validation using express-validator
+JWT token generation using jsonwebtoken
+HTTPS support for production using Node’s built‑in HTTPS module
+Note: Make sure to install the required packages:
+
+npm install express-validator jsonwebtoken bcrypt uuid
+For HTTPS, you’ll need your SSL certificate and key files (which might be provided by your hosting provider or generated via a tool like Let's Encrypt).
+
+1. Update the User Service for JWT Generation
+In Services/UserService.js, after validating credentials, generate a JWT token. Ensure you have a secret key in your environment (e.g., JWT_SECRET).
+
+### javascript
+const bcrypt = require('bcrypt');
+const jwt = require('jsonwebtoken');
+const { v4: uuidv4 } = require('uuid'); // For generating unique IDs
+const userRepository = require('../Repositories/UserRepository');
+const User = require('../Models/User');
+
+const SALT_ROUNDS = 12; // Increase for higher security
+
+async function registerUser({ email, username, password }) {
+  // Check if user already exists
+  const existing = await userRepository.getUserByEmail(email);
+  if (existing) {
+    throw new Error('User with that email already exists');
+  }
+
+  // Hash the password
+  const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
+
+  // Generate a unique user id
+  const id = uuidv4();
+
+  // Create a new user instance
+  const newUser = new User(id, email, username, passwordHash);
+
+  // Save user in DB
+  const createdUser = await userRepository.createUser(newUser);
+  // Generate a token after successful registration
+  const token = jwt.sign(
+    { id: createdUser.id, email: createdUser.email, username: createdUser.username },
+    process.env.JWT_SECRET,
+    { expiresIn: '1h' }
+  );
+
+  return { user: createdUser, token };
+}
+
+async function loginUser({ email, password }) {
+  const userRecord = await userRepository.getUserByEmail(email);
+  if (!userRecord) {
+    throw new Error('Invalid email or password');
+  }
+
+  // Compare the hashed password
+  const match = await bcrypt.compare(password, userRecord.password_hash);
+  if (!match) {
+    throw new Error('Invalid email or password');
+  }
+
+  // Generate JWT token
+  const token = jwt.sign(
+    { id: userRecord.id, email: userRecord.email, username: userRecord.username },
+    process.env.JWT_SECRET,
+    { expiresIn: '1h' }
+  );
+
+  return { user: userRecord, token };
+}
+
+module.exports = {
+  registerUser,
+  loginUser
+};
+
+2. Update the User Controller with Input Validation
+Create or update Controllers/UserController.js with express‑validator checks on both registration and login endpoints:
+
+javascript
+
+const express = require('express');
+const { check, validationResult } = require('express-validator');
+const userService = require('../Services/UserService');
+
+const router = express.Router();
+
+// Validation middleware for registration
+const validateRegistration = [
+  check('email').isEmail().withMessage('Valid email is required'),
+  check('username').notEmpty().withMessage('Username is required'),
+  check('password')
+    .isLength({ min: 8 })
+    .withMessage('Password must be at least 8 characters long'),
+];
+
+// Validation middleware for login
+const validateLogin = [
+  check('email').isEmail().withMessage('Valid email is required'),
+  check('password').notEmpty().withMessage('Password is required'),
+];
+
+// Endpoint for user registration
+router.post('/register', validateRegistration, async (req, res, next) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      // Return validation errors if any
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const { email, username, password } = req.body;
+    const { user, token } = await userService.registerUser({ email, username, password });
+    res.status(201).json({ message: 'User created successfully', user: { id: user.id, email: user.email, username: user.username }, token });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Endpoint for user login
+router.post('/login', validateLogin, async (req, res, next) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      // Return validation errors if any
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const { email, password } = req.body;
+    const { user, token } = await userService.loginUser({ email, password });
+    res.json({ message: 'Login successful', user: { id: user.id, email: user.email, username: user.username }, token });
+  } catch (error) {
+    next(error);
+  }
+});
+
+module.exports = { mount: '/api/users', router };
+
+3. Update Your Entry File for HTTPS in Production
+In your main server file (e.g., entry.js), load environment variables and conditionally set up HTTPS when in production:
+`
+javascript
+Copy
+require('dotenv').config(); // Load environment variables first
+
+const express = require('express');
+const fs = require('fs');
+const https = require('https');
+const app = express();
+const port = process.env.LISTENING_PORT || 80;
+const PageController = require('./Controllers/PageController');
+const userController = require('./Controllers/UserController');
+
+// Security and CORS middleware, body parsers, etc. (custom middleware not shown for brevity)
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// Mount existing controllers
+app.use(PageController.mount, PageController.router);
+app.use(userController.mount, userController.router);
+
+// Centralized error handling middleware
+app.use((err, req, res, next) => {
+  console.error(err);
+  res.status(500).json({ error: err.message });
+});
+
+// Setup HTTPS for production, fallback to HTTP in development
+if (process.env.NODE_ENV === 'production') {
+  // Replace the paths with your actual certificate and key paths
+  const httpsOptions = {
+    key: fs.readFileSync(process.env.SSL_KEY_PATH || '/path/to/privkey.pem'),
+    cert: fs.readFileSync(process.env.SSL_CERT_PATH || '/path/to/fullchain.pem'),
+  };
+
+  https.createServer(httpsOptions, app).listen(port, () => {
+    console.log('HTTPS Server is running on port ${port}');
+  });
+} else {
+  app.listen(port, () => {
+    console.log('Server is running on port ${port}');
+  });
+}
+Environment Variables for Production:
+In your production .env file, include paths for your SSL certificate and key (and the JWT secret):
+
+LISTENING_PORT=443
+NODE_ENV=production
+SERVER_ORIGIN=https://your-production-domain.com
+JWT_SECRET=your_super_secret_jwt_key
+SSL_KEY_PATH=/path/to/your/privkey.pem
+SSL_CERT_PATH=/path/to/your/fullchain.pem
+CORS_ALLOWED_DOMAINS='["https://your-production-domain.com", "https://another-trusted-domain.com"]'
