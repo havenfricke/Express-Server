@@ -7,11 +7,11 @@
 ## SETUP
 - Create .env file
 - Place in root directory
-`code` npm i
+- `npm i` 
 
 ## RUN
-`code` cd server
-`code` node entry.js
+- `cd server` 
+- `node entry.js` 
 
 ## DOTENV REQUIREMENTS
 - LISTENING_PORT=yourport
